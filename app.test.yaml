@@ -1,0 +1,10 @@
+App:
+  name: laugh-tale
+  port: 8778
+  read_timeout: 5 # seconds
+  write_timeout: 10 # seconds
+  timezone: Asia/Jakarta
+  debug: false # (true|false)
+  env: development # ('development'|'staging'|'production')
+  secret_key: sekret
+  expire_in: 40000
