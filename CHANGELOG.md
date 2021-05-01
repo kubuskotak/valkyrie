@@ -1,7 +1,11 @@
 <a name="unreleased"></a>
 ## [Unreleased]
 
+### Docs
+- change log
+
 ### Feat
+- tracer and password test
 - config func and test
 
 
