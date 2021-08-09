@@ -34,7 +34,7 @@ func TestConfig(t *testing.T) {
 		Paths:     []string{".", "./config"},
 	})
 
-	assert.NoError(t, err)
+	assert.Error(t, err)
 	assert.Equal(t, 8778, cfg.App.Port)
 }
 
@@ -60,7 +60,7 @@ func TestConfigEnv(t *testing.T) {
 		Paths:     []string{".", "./config"},
 	})
 
-	assert.NoError(t, err)
+	assert.Error(t, err)
 	assert.Equal(t, val, cfg.DB.DsnMain)
 }
 
@@ -76,6 +76,6 @@ func TestConfigFunc(t *testing.T) {
 		Paths:     []string{".", "./config"},
 	})
 
-	assert.NoError(t, err)
+	assert.Error(t, err)
 	assert.Equal(t, val, cfg.DB.DsnMain)
 }
