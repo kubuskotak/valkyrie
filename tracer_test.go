@@ -1,7 +1,11 @@
 package valkyrie
 
 import (
+	"bytes"
 	"context"
+	"github.com/rs/zerolog"
+	"github.com/stretchr/testify/require"
+	"net/http"
 	"testing"
 
 	"github.com/opentracing/opentracing-go"
@@ -24,4 +28,20 @@ func TestTracer(t *testing.T) {
 	defer serverSpan.Finish()
 
 	opentracing.ContextWithSpan(ctx, serverSpan)
+}
+
+func ExampleTraceContextHook() {
+	handleRequest := func(w http.ResponseWriter, req *http.Request) {
+		logger := zerolog.Ctx(req.Context()).Hook(TraceContextHook(req.Context()))
+		logger.Error().Msg("message")
+	}
+	http.HandleFunc("/", handleRequest)
+}
+
+func TestTraceContextHookNothing(t *testing.T) {
+	var buf bytes.Buffer
+	logger := zerolog.New(&buf).Hook(TraceContextHook(context.Background()))
+	logger.Info().Msg("message")
+
+	require.Equal(t, "{\"level\":\"info\",\"message\":\"message\"}\n", buf.String())
 }

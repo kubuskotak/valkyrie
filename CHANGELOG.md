@@ -1,7 +1,11 @@
 <a name="unreleased"></a>
 ## [Unreleased]
 
+### Doc
+- unreleased update
+
 ### Feat
+- tracer zerolog hook
 - clone struct
 
 ### Test
