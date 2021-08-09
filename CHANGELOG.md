@@ -1,7 +1,11 @@
 <a name="unreleased"></a>
 ## [Unreleased]
 
+
+<a name="v0.2.0"></a>
+## [v0.2.0] - 2021-08-09
 ### Doc
+- unreleased update
 - unreleased update
 
 ### Feat
@@ -35,5 +39,6 @@
 - branching doc
 
 
-[Unreleased]: https://github.com/kubuskotak/valkyrie/compare/v0.1.9...HEAD
+[Unreleased]: https://github.com/kubuskotak/valkyrie/compare/v0.2.0...HEAD
+[v0.2.0]: https://github.com/kubuskotak/valkyrie/compare/v0.1.9...v0.2.0
 [v0.1.9]: https://github.com/kubuskotak/valkyrie/compare/v0.0.1...v0.1.9
