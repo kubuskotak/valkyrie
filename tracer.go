@@ -8,43 +8,43 @@ import (
 	"fmt"
 	"github.com/opentracing/opentracing-go/ext"
 	"github.com/rs/zerolog"
-	"github.com/uber/jaeger-client-go"
+	jaegerClient "github.com/uber/jaeger-client-go"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/exporters/jaeger"
+	"go.opentelemetry.io/otel/sdk/resource"
+	semConv "go.opentelemetry.io/otel/semconv/v1.7.0"
 	"io"
 	"time"
 
 	"github.com/opentracing/opentracing-go"
 	spanLog "github.com/opentracing/opentracing-go/log"
-	"github.com/rs/zerolog/log"
-	jaegerCfg "github.com/uber/jaeger-client-go/config"
-	"github.com/uber/jaeger-lib/metrics"
+	sdkTrace "go.opentelemetry.io/otel/sdk/trace"
 )
 
-func Tracer(service, version string) (opentracing.Tracer, func(), error) {
-	cfg, err := jaegerCfg.FromEnv()
+func Tracer(service, version string) (*sdkTrace.TracerProvider, func(ctx context.Context), error) {
+	exp, err := jaeger.New(jaeger.WithAgentEndpoint())
 	if err != nil {
 		log.Error().Err(err).Msg("Could not parse Jaeger env vars")
 		return nil, nil, err
 	}
-
-	cfg.Sampler.Param = 1
-
-	if service != "" {
-		cfg.ServiceName = service
-	}
-	jMetricsFactory := metrics.NullFactory
-
-	tracer, closer, err := cfg.NewTracer(
-		jaegerCfg.Metrics(jMetricsFactory),
-		jaegerCfg.Tag(fmt.Sprintf("%.version", service), version),
-		jaegerCfg.MaxTagValueLength(2048),
+	tracer := sdkTrace.NewTracerProvider(
+		// Always be sure to batch in production.
+		sdkTrace.WithBatcher(exp),
+		// Record information about this application in an Resource.
+		sdkTrace.WithResource(resource.NewWithAttributes(
+			semConv.SchemaURL,
+			semConv.ServiceNameKey.String(service),
+			attribute.String("version", version),
+		)),
 	)
-	if err != nil {
-		log.Error().Err(err).Msg("Could not initialize jaeger tracer")
-		return nil, nil, err
-	}
 
-	cleanup := func() {
-		_ = closer.Close()
+	cleanup := func(ctx context.Context) {
+		// Do not make the application hang when it is shutdown.
+		ctx, cancel := context.WithTimeout(ctx, time.Second*5)
+		defer cancel()
+		if err := tracer.Shutdown(ctx); err != nil {
+			log.Fatal().Err(err)
+		}
 	}
 
 	return tracer, cleanup, err
@@ -73,7 +73,7 @@ type traceContextHook struct {
 
 func (t traceContextHook) Run(e *zerolog.Event, level zerolog.Level, message string) {
 	if span := opentracing.SpanFromContext(t.ctx); span != nil {
-		if sc, ok := span.Context().(jaeger.SpanContext); ok {
+		if sc, ok := span.Context().(jaegerClient.SpanContext); ok {
 			buf := new(bytes.Buffer)
 			if err := span.Tracer().Inject(sc, opentracing.Binary, buf); err != nil {
 				span.LogFields(spanLog.Error(err))
