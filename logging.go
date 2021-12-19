@@ -24,6 +24,7 @@ func hook(ctx context.Context, ev *zerolog.Event) *zerolog.Event {
 		return ev
 	}
 
+	*log = log.Hook(TraceContextHook(ctx))
 	b := baggage.FromContext(ctx)
 	for _, m := range b.Members() {
 		ev.Str(m.Key(), m.Value())
@@ -65,7 +66,6 @@ func Warn(ctx context.Context) *zerolog.Event {
 func Error(ctx context.Context) *zerolog.Event {
 	return hook(ctx, log.Error())
 }
-
 
 // for testing
 
