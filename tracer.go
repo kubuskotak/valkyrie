@@ -158,6 +158,7 @@ func (w *ZeroWriter) WriteLevel(level zerolog.Level, p []byte) (int, error) {
 			context.Background(),
 			trace.NewSpanContext(scc),
 		), "valkyrie.trace")
+	defer span.End()
 
 	for key, value := range events {
 		if key == SpanContext {
