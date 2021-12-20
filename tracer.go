@@ -140,22 +140,14 @@ func (w *ZeroWriter) WriteLevel(level zerolog.Level, p []byte) (int, error) {
 	}
 
 	if logRecord.traceId != "" {
-		id := logRecord.traceId
-		if len(id) != traceID128bitsWidth && len(id) != traceID64bitsWidth {
-			return 0, errInvalidTraceIDLength
-		}
-		scc.TraceID, err = trace.TraceIDFromHex(id)
+		scc.TraceID, err = trace.TraceIDFromHex(logRecord.traceId)
 		if err != nil {
 			return 0, errMalformedTraceID
 		}
 	}
 
 	if logRecord.spanId != "" {
-		id := logRecord.spanId
-		if len(id) != spanIDWidth {
-			return 0, errInvalidSpanIDLength
-		}
-		scc.SpanID, err = trace.SpanIDFromHex(id)
+		scc.SpanID, err = trace.SpanIDFromHex(logRecord.spanId)
 		if err != nil {
 			return 0, errMalformedSpanID
 		}
