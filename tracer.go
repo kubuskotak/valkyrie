@@ -11,6 +11,7 @@ import (
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/codes"
 	"go.opentelemetry.io/otel/exporters/jaeger"
+	"go.opentelemetry.io/otel/propagation"
 	"go.opentelemetry.io/otel/sdk/resource"
 	semConv "go.opentelemetry.io/otel/semconv/v1.7.0"
 	"go.opentelemetry.io/otel/trace"
@@ -98,6 +99,11 @@ func (t traceContextHook) Run(e *zerolog.Event, level zerolog.Level, message str
 	}
 	e.Str(TraceIDFieldName, sc.TraceID().String())
 	e.Str(SpanIDFieldName, sc.SpanID().String())
+
+	otel.GetTextMapPropagator().Inject(t.ctx, propagation.MapCarrier{
+		TraceIDFieldName: sc.TraceID().String(),
+		SpanIDFieldName:  sc.SpanID().String(),
+	})
 }
 
 type ZeroWriter struct {
@@ -152,13 +158,12 @@ func (w *ZeroWriter) WriteLevel(level zerolog.Level, p []byte) (int, error) {
 			return 0, errMalformedSpanID
 		}
 	}
-
-	tr := otel.GetTracerProvider().Tracer("")
-	_, span := tr.Start(trace.ContextWithRemoteSpanContext(
+	ctx := trace.ContextWithRemoteSpanContext(
 		context.Background(),
 		trace.NewSpanContext(scc),
-	), "valkyrie.trace",
-		trace.WithSpanKind(trace.SpanKindServer))
+	)
+	ctx = otel.GetTextMapPropagator().Extract(ctx, propagation.MapCarrier{})
+	span := trace.SpanFromContext(ctx)
 	defer span.End()
 
 	for key, value := range events {
