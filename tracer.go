@@ -97,7 +97,7 @@ func (t traceContextHook) Run(e *zerolog.Event, level zerolog.Level, message str
 		return
 	}
 	e.Str(TraceIDFieldName, sc.TraceID().String())
-	e.Str(SpanIDFieldName, sc.TraceID().String())
+	e.Str(SpanIDFieldName, sc.SpanID().String())
 }
 
 type ZeroWriter struct {
