@@ -153,11 +153,12 @@ func (w *ZeroWriter) WriteLevel(level zerolog.Level, p []byte) (int, error) {
 		}
 	}
 
-	_, span := StartSpan(
-		trace.ContextWithRemoteSpanContext(
-			context.Background(),
-			trace.NewSpanContext(scc),
-		), "valkyrie.trace")
+	tr := otel.GetTracerProvider().Tracer("")
+	_, span := tr.Start(trace.ContextWithRemoteSpanContext(
+		context.Background(),
+		trace.NewSpanContext(scc),
+	), "valkyrie.trace",
+		trace.WithSpanKind(trace.SpanKindServer))
 	defer span.End()
 
 	for key, value := range events {
