@@ -168,10 +168,10 @@ func (w *ZeroWriter) WriteLevel(level zerolog.Level, p []byte) (int, error) {
 			enc := json.NewEncoder(buf)
 			enc.SetEscapeHTML(true)
 			if err := enc.Encode(events[zerolog.MessageFieldName]); err != nil {
+				span.RecordError(err)
 				continue
 			}
 			span.SetAttributes(attribute.String(zerolog.MessageFieldName, buf.String()))
-			continue
 		}
 
 		switch v := value.(type) {
