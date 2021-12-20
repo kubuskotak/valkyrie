@@ -141,7 +141,6 @@ func (w *ZeroWriter) WriteLevel(level zerolog.Level, p []byte) (int, error) {
 
 	if logRecord.traceId != "" {
 		id := logRecord.spanId
-		log.Info().Str(TraceIDFieldName, id).Send()
 		if len(id) != traceID128bitsWidth && len(id) != traceID64bitsWidth {
 			return 0, errInvalidTraceIDLength
 		}
@@ -157,7 +156,6 @@ func (w *ZeroWriter) WriteLevel(level zerolog.Level, p []byte) (int, error) {
 
 	if logRecord.spanId != "" {
 		id := logRecord.spanId
-		log.Info().Str(SpanIDFieldName, id).Send()
 		if len(id) != spanIDWidth {
 			return 0, errInvalidSpanIDLength
 		}
