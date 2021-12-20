@@ -23,13 +23,10 @@ func hook(ctx context.Context, ev *zerolog.Event) *zerolog.Event {
 	if !ev.Enabled() {
 		return ev
 	}
-
-	*log = log.Hook(TraceContextHook(ctx))
 	b := baggage.FromContext(ctx)
 	for _, m := range b.Members() {
 		ev.Str(m.Key(), m.Value())
 	}
-
 	return ev
 }
 

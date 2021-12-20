@@ -153,9 +153,11 @@ func (w *ZeroWriter) WriteLevel(level zerolog.Level, p []byte) (int, error) {
 		}
 	}
 
-	ctx := trace.ContextWithRemoteSpanContext(context.Background(), trace.NewSpanContext(scc))
-	span := trace.SpanFromContext(ctx)
-	defer span.End()
+	_, span := StartSpan(
+		trace.ContextWithRemoteSpanContext(
+			context.Background(),
+			trace.NewSpanContext(scc),
+		), "valkyrie.trace")
 
 	for key, value := range events {
 		if key == SpanContext {
@@ -188,6 +190,8 @@ func (w *ZeroWriter) WriteLevel(level zerolog.Level, p []byte) (int, error) {
 			}
 		}
 	}
+
+	fmt.Println("---level---")
 
 	return len(p), nil
 }
