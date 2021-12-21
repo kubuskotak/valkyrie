@@ -158,13 +158,12 @@ func (w *ZeroWriter) WriteLevel(level zerolog.Level, p []byte) (int, error) {
 			return 0, errMalformedSpanID
 		}
 	}
-	ctx := trace.ContextWithRemoteSpanContext(
+	ctx, span := StartSpan(trace.ContextWithRemoteSpanContext(
 		context.Background(),
 		trace.NewSpanContext(scc),
-	)
-	ctx = otel.GetTextMapPropagator().Extract(ctx, propagation.MapCarrier{})
-	span := trace.SpanFromContext(ctx)
+	), "logging")
 	defer span.End()
+	ctx = otel.GetTextMapPropagator().Extract(ctx, propagation.MapCarrier{})
 
 	for key, value := range events {
 		if key == SpanContext {
