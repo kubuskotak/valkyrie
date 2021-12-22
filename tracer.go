@@ -3,48 +3,49 @@ package valkyrie
 import (
 	"bytes"
 	"context"
-	"encoding/hex"
 	"encoding/json"
 	"fmt"
-	"github.com/opentracing/opentracing-go/ext"
 	"github.com/rs/zerolog"
-	"github.com/uber/jaeger-client-go"
+	"github.com/rs/zerolog/log"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/codes"
+	"go.opentelemetry.io/otel/exporters/jaeger"
+	"go.opentelemetry.io/otel/propagation"
+	"go.opentelemetry.io/otel/sdk/resource"
+	semConv "go.opentelemetry.io/otel/semconv/v1.7.0"
+	"go.opentelemetry.io/otel/trace"
 	"io"
+	"net/http"
 	"time"
 
-	"github.com/opentracing/opentracing-go"
-	spanLog "github.com/opentracing/opentracing-go/log"
-	"github.com/rs/zerolog/log"
-	jaegerCfg "github.com/uber/jaeger-client-go/config"
-	"github.com/uber/jaeger-lib/metrics"
+	sdkTrace "go.opentelemetry.io/otel/sdk/trace"
 )
 
-func Tracer(service, version string) (opentracing.Tracer, func(), error) {
-	cfg, err := jaegerCfg.FromEnv()
+func Tracer(service, version string) (*sdkTrace.TracerProvider, func(ctx context.Context), error) {
+	exp, err := jaeger.New(jaeger.WithAgentEndpoint())
 	if err != nil {
 		log.Error().Err(err).Msg("Could not parse Jaeger env vars")
 		return nil, nil, err
 	}
-
-	cfg.Sampler.Param = 1
-
-	if service != "" {
-		cfg.ServiceName = service
-	}
-	jMetricsFactory := metrics.NullFactory
-
-	tracer, closer, err := cfg.NewTracer(
-		jaegerCfg.Metrics(jMetricsFactory),
-		jaegerCfg.Tag(fmt.Sprintf("%.version", service), version),
-		jaegerCfg.MaxTagValueLength(2048),
+	tracer := sdkTrace.NewTracerProvider(
+		// Always be sure to batch in production.
+		sdkTrace.WithBatcher(exp),
+		// Record information about this application in a Resource.
+		sdkTrace.WithResource(resource.NewWithAttributes(
+			semConv.SchemaURL,
+			semConv.ServiceNameKey.String(service),
+			attribute.String("version", version),
+		)),
 	)
-	if err != nil {
-		log.Error().Err(err).Msg("Could not initialize jaeger tracer")
-		return nil, nil, err
-	}
 
-	cleanup := func() {
-		_ = closer.Close()
+	cleanup := func(ctx context.Context) {
+		// Do not make the application hang when it is shutdown.
+		ctx, cancel := context.WithTimeout(ctx, time.Second*5)
+		defer cancel()
+		if err := tracer.Shutdown(ctx); err != nil {
+			log.Fatal().Err(err)
+		}
 	}
 
 	return tracer, cleanup, err
@@ -67,23 +68,26 @@ func TraceContextHook(ctx context.Context) zerolog.Hook {
 	return traceContextHook{ctx}
 }
 
+var carrier http.Header
+
 type traceContextHook struct {
 	ctx context.Context
 }
 
 func (t traceContextHook) Run(e *zerolog.Event, level zerolog.Level, message string) {
-	if span := opentracing.SpanFromContext(t.ctx); span != nil {
-		if sc, ok := span.Context().(jaeger.SpanContext); ok {
-			buf := new(bytes.Buffer)
-			if err := span.Tracer().Inject(sc, opentracing.Binary, buf); err != nil {
-				span.LogFields(spanLog.Error(err))
-			}
-
-			e.Hex(SpanContext, buf.Bytes())
-			e.Str(TraceIDFieldName, sc.TraceID().String())
-			e.Str(SpanIDFieldName, sc.SpanID().String())
-		}
+	carrier = http.Header{}
+	sc := trace.SpanFromContext(t.ctx).SpanContext()
+	if !sc.TraceID().IsValid() || !sc.SpanID().IsValid() {
+		return
 	}
+	b, err := sc.MarshalJSON()
+	if err != nil {
+		return
+	}
+	e.Bytes(SpanContext, b)
+	e.Str(TraceIDFieldName, sc.TraceID().String())
+	e.Str(SpanIDFieldName, sc.SpanID().String())
+	otel.GetTextMapPropagator().Inject(t.ctx, propagation.HeaderCarrier(carrier))
 }
 
 type ZeroWriter struct {
@@ -120,59 +124,68 @@ func (w *ZeroWriter) WriteLevel(level zerolog.Level, p []byte) (int, error) {
 		return 0, err
 	}
 
-	if logRecord.spanContext != nil {
-		span := opentracing.StartSpan(
-			"zero-logger",
-			ext.RPCServerOption(logRecord.spanContext),
-		)
-		defer span.Finish()
-
-		fields := make([]spanLog.Field, 0)
+	if logRecord.spanContext.IsValid() {
+		ctx := otel.GetTextMapPropagator().Extract(
+			context.Background(), propagation.HeaderCarrier(carrier))
+		tr := otel.Tracer(fmt.Sprintf("logger::%s", level.String()))
+		_, span := tr.Start(ctx, level.String())
+		defer span.End()
 		for key, value := range events {
 			if key == SpanContext {
 				continue
 			}
 			if key == zerolog.LevelFieldName {
 				w.levelTo(value.(string), span)
-				fields = append(fields, spanLog.String(key, value.(string)))
-				span.SetTag(key, value.(string))
-				span.SetTag(zerolog.MessageFieldName, events[zerolog.MessageFieldName])
-				continue
+				span.SetAttributes(attribute.Key(key).String(value.(string)))
+				buf := &bytes.Buffer{}
+				enc := json.NewEncoder(buf)
+				enc.SetEscapeHTML(true)
+				if err := enc.Encode(events[zerolog.MessageFieldName]); err != nil {
+					span.RecordError(err)
+					continue
+				}
+				span.SetAttributes(attribute.Key(zerolog.MessageFieldName).String(buf.String()))
 			}
 
 			switch v := value.(type) {
 			case string:
-				fields = append(fields, spanLog.String(key, v))
+				span.SetAttributes(attribute.Key(key).String(v))
 			case json.Number:
-				fields = append(fields, spanLog.String(key, fmt.Sprint(v)))
+				span.SetAttributes(attribute.Key(key).String(fmt.Sprintf("%v", v)))
 			default:
 				b, err := json.Marshal(v)
 				if err != nil {
-					fields = append(fields, spanLog.String(key, fmt.Sprintf("[error: %v]", err)))
+					span.RecordError(err)
 				} else {
-					fields = append(fields, spanLog.String(key, string(b)))
+					span.SetAttributes(attribute.Key(key).String(fmt.Sprintf("%s", b)))
 				}
 			}
 		}
-		span.LogFields(fields...)
 	}
-
 	return len(p), nil
 }
 
-func (w *ZeroWriter) levelTo(level string, span opentracing.Span) {
+func (w *ZeroWriter) levelTo(level string, span trace.Span) {
 	lvl, _ := zerolog.ParseLevel(level)
 	switch lvl {
 	case zerolog.ErrorLevel, zerolog.FatalLevel, zerolog.PanicLevel:
-		span.SetTag("error", true)
+		span.SetStatus(codes.Error, "logging")
 	}
+}
+
+type spanContext struct {
+	TraceID    string
+	SpanID     string
+	TraceFlags string
+	TraceState string
+	Remote     bool
 }
 
 type logRecord struct {
 	message         string
 	timestamp       time.Time
 	traceId, spanId string
-	spanContext     opentracing.SpanContext
+	spanContext     trace.SpanContext
 }
 
 func (l *logRecord) decode(r io.Reader) (events map[string]interface{}, err error) {
@@ -189,18 +202,31 @@ func (l *logRecord) decode(r io.Reader) (events map[string]interface{}, err erro
 			l.timestamp = t.UTC()
 		}
 	}
-
-	if strVal, ok := m[SpanContext].(string); ok {
-		b, _ := hex.DecodeString(strVal)
-		buf := new(bytes.Buffer)
-		buf.Write(b)
-
-		sc, err := opentracing.GlobalTracer().
-			Extract(opentracing.Binary, buf)
+	if b, ok := m[SpanContext].(string); ok {
+		var sc spanContext
+		err := json.Unmarshal([]byte(b), &sc)
 		if err != nil {
 			return events, err
 		}
-		l.spanContext = sc
+		tid, err := trace.TraceIDFromHex(sc.TraceID)
+		if err != nil {
+			return events, err
+		}
+		sid, err := trace.SpanIDFromHex(sc.SpanID)
+		if err != nil {
+			return events, err
+		}
+
+		scc := trace.SpanContextConfig{
+			TraceID:    tid,
+			SpanID:     sid,
+			TraceFlags: trace.FlagsSampled,
+			TraceState: trace.TraceState{},
+			Remote:     false,
+		}
+		if sc := trace.NewSpanContext(scc); sc.IsValid() {
+			l.spanContext = sc
+		}
 	}
 
 	if strVal, ok := m[SpanIDFieldName].(string); ok {

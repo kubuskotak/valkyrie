@@ -5,29 +5,27 @@ import (
 	"context"
 	"github.com/rs/zerolog"
 	"github.com/stretchr/testify/require"
+	"go.opentelemetry.io/otel/trace"
 	"net/http"
 	"testing"
 
-	"github.com/opentracing/opentracing-go"
 	"github.com/stretchr/testify/assert"
 )
 
 func TestTracer(t *testing.T) {
 	tracer, cleanupTrace, err := Tracer("init app", "v1")
 	assert.NoError(t, err)
-	defer cleanupTrace()
+	defer cleanupTrace(context.Background())
 
 	ctx := context.Background()
-	serverSpan := opentracing.SpanFromContext(ctx)
+	serverSpan := trace.SpanFromContext(ctx)
 	if serverSpan == nil {
 		// All we can do is create a new root span.
-		serverSpan = tracer.StartSpan("operationName")
-	} else {
-		serverSpan.SetOperationName("operationName")
+		_, serverSpan = tracer.Tracer("TestTracer").Start(ctx, "operationName")
 	}
-	defer serverSpan.Finish()
+	defer serverSpan.End()
 
-	opentracing.ContextWithSpan(ctx, serverSpan)
+	trace.ContextWithSpan(ctx, serverSpan)
 }
 
 func ExampleTraceContextHook() {
