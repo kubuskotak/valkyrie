@@ -4,9 +4,9 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"github.com/rs/zerolog"
+	"github.com/rs/zerolog/log"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/codes"
@@ -16,10 +16,9 @@ import (
 	semConv "go.opentelemetry.io/otel/semconv/v1.7.0"
 	"go.opentelemetry.io/otel/trace"
 	"io"
-	"runtime"
+	"net/http"
 	"time"
 
-	"github.com/opentracing/opentracing-go"
 	sdkTrace "go.opentelemetry.io/otel/sdk/trace"
 )
 
@@ -52,19 +51,6 @@ func Tracer(service, version string) (*sdkTrace.TracerProvider, func(ctx context
 	return tracer, cleanup, err
 }
 
-func StartSpan(ctx context.Context, operationName string) (context.Context, trace.Span) {
-	var tracer trace.Tracer
-	if span := trace.SpanFromContext(ctx); span.SpanContext().IsValid() {
-		tracer = span.TracerProvider().Tracer(operationName)
-	} else {
-		tracer = otel.GetTracerProvider().Tracer(operationName)
-	}
-	pc, _, _, _ := runtime.Caller(1)
-	details := runtime.FuncForPC(pc)
-	return tracer.Start(ctx, details.Name())
-
-}
-
 const (
 	// SpanIDFieldName is the field name for the span ID.
 	SpanIDFieldName = "span.id"
@@ -74,12 +60,6 @@ const (
 
 	// TraceIDFieldName is the field name for the trace ID.
 	TraceIDFieldName = "trace.id"
-
-	traceID64bitsWidth  = 64 / 4
-	traceID128bitsWidth = 128 / 4
-	spanIDWidth         = 64 / 4
-
-	traceIDPadding = "0000000000000000"
 )
 
 // TraceContextHook returns a zerolog.Hook that will add any trace context
@@ -88,22 +68,26 @@ func TraceContextHook(ctx context.Context) zerolog.Hook {
 	return traceContextHook{ctx}
 }
 
+var carrier http.Header
+
 type traceContextHook struct {
 	ctx context.Context
 }
 
 func (t traceContextHook) Run(e *zerolog.Event, level zerolog.Level, message string) {
+	carrier = http.Header{}
 	sc := trace.SpanFromContext(t.ctx).SpanContext()
 	if !sc.TraceID().IsValid() || !sc.SpanID().IsValid() {
 		return
 	}
+	b, err := sc.MarshalJSON()
+	if err != nil {
+		return
+	}
+	e.Bytes(SpanContext, b)
 	e.Str(TraceIDFieldName, sc.TraceID().String())
 	e.Str(SpanIDFieldName, sc.SpanID().String())
-
-	otel.GetTextMapPropagator().Inject(t.ctx, propagation.MapCarrier{
-		TraceIDFieldName: sc.TraceID().String(),
-		SpanIDFieldName:  sc.SpanID().String(),
-	})
+	otel.GetTextMapPropagator().Inject(t.ctx, propagation.HeaderCarrier(carrier))
 }
 
 type ZeroWriter struct {
@@ -134,71 +118,50 @@ func (w *ZeroWriter) WriteLevel(level zerolog.Level, p []byte) (int, error) {
 		return len(p), nil
 	}
 
-	var (
-		scc = trace.SpanContextConfig{}
-		err error
-	)
-
 	var logRecord logRecord
 	events, err := logRecord.decode(bytes.NewReader(p))
 	if err != nil {
 		return 0, err
 	}
 
-	if logRecord.traceId != "" {
-		scc.TraceID, err = trace.TraceIDFromHex(logRecord.traceId)
-		if err != nil {
-			return 0, errMalformedTraceID
-		}
-	}
-
-	if logRecord.spanId != "" {
-		scc.SpanID, err = trace.SpanIDFromHex(logRecord.spanId)
-		if err != nil {
-			return 0, errMalformedSpanID
-		}
-	}
-	ctx, span := StartSpan(trace.ContextWithRemoteSpanContext(
-		context.Background(),
-		trace.NewSpanContext(scc),
-	), "logging")
-	defer span.End()
-	ctx = otel.GetTextMapPropagator().Extract(ctx, propagation.MapCarrier{})
-
-	for key, value := range events {
-		if key == SpanContext {
-			continue
-		}
-		if key == zerolog.LevelFieldName {
-			w.levelTo(value.(string), span)
-			span.SetAttributes(attribute.String(key, value.(string)))
-			buf := &bytes.Buffer{}
-			enc := json.NewEncoder(buf)
-			enc.SetEscapeHTML(true)
-			if err := enc.Encode(events[zerolog.MessageFieldName]); err != nil {
-				span.RecordError(err)
+	if logRecord.spanContext.IsValid() {
+		ctx := otel.GetTextMapPropagator().Extract(
+			context.Background(), propagation.HeaderCarrier(carrier))
+		tr := otel.Tracer(fmt.Sprintf("logger::%s", level.String()))
+		_, span := tr.Start(ctx, level.String())
+		defer span.End()
+		for key, value := range events {
+			if key == SpanContext {
 				continue
 			}
-			span.SetAttributes(attribute.String(zerolog.MessageFieldName, buf.String()))
-		}
+			if key == zerolog.LevelFieldName {
+				w.levelTo(value.(string), span)
+				span.SetAttributes(attribute.Key(key).String(value.(string)))
+				buf := &bytes.Buffer{}
+				enc := json.NewEncoder(buf)
+				enc.SetEscapeHTML(true)
+				if err := enc.Encode(events[zerolog.MessageFieldName]); err != nil {
+					span.RecordError(err)
+					continue
+				}
+				span.SetAttributes(attribute.Key(zerolog.MessageFieldName).String(buf.String()))
+			}
 
-		switch v := value.(type) {
-		case string:
-			span.SetAttributes(attribute.String(key, v))
-		case json.Number:
-			span.SetAttributes(attribute.String(key, fmt.Sprintf("%v", v)))
-		default:
-			b, err := json.Marshal(v)
-			if err != nil {
-				span.RecordError(err)
-			} else {
-				span.SetAttributes(attribute.String(key, fmt.Sprintf("%s", b)))
+			switch v := value.(type) {
+			case string:
+				span.SetAttributes(attribute.Key(key).String(v))
+			case json.Number:
+				span.SetAttributes(attribute.Key(key).String(fmt.Sprintf("%v", v)))
+			default:
+				b, err := json.Marshal(v)
+				if err != nil {
+					span.RecordError(err)
+				} else {
+					span.SetAttributes(attribute.Key(key).String(fmt.Sprintf("%s", b)))
+				}
 			}
 		}
 	}
-
-	fmt.Println("---level---")
-
 	return len(p), nil
 }
 
@@ -210,18 +173,19 @@ func (w *ZeroWriter) levelTo(level string, span trace.Span) {
 	}
 }
 
-var (
-	errInvalidTraceIDLength = errors.New("invalid trace id length, must be either 16 or 32")
-	errMalformedTraceID     = errors.New("cannot decode trace id from header, should be a string of hex, lowercase trace id can't be all zero")
-	errInvalidSpanIDLength  = errors.New("invalid span id length, must be 16")
-	errMalformedSpanID      = errors.New("cannot decode span id from header, should be a string of hex, lowercase span id can't be all zero")
-)
+type spanContext struct {
+	TraceID    string
+	SpanID     string
+	TraceFlags string
+	TraceState string
+	Remote     bool
+}
 
 type logRecord struct {
 	message         string
 	timestamp       time.Time
 	traceId, spanId string
-	spanContext     opentracing.SpanContext
+	spanContext     trace.SpanContext
 }
 
 func (l *logRecord) decode(r io.Reader) (events map[string]interface{}, err error) {
@@ -236,6 +200,32 @@ func (l *logRecord) decode(r io.Reader) (events map[string]interface{}, err erro
 	if strVal, ok := m[zerolog.TimestampFieldName].(string); ok {
 		if t, err := time.Parse(zerolog.TimeFieldFormat, strVal); err == nil {
 			l.timestamp = t.UTC()
+		}
+	}
+	if b, ok := m[SpanContext].(string); ok {
+		var sc spanContext
+		err := json.Unmarshal([]byte(b), &sc)
+		if err != nil {
+			return events, err
+		}
+		tid, err := trace.TraceIDFromHex(sc.TraceID)
+		if err != nil {
+			return events, err
+		}
+		sid, err := trace.SpanIDFromHex(sc.SpanID)
+		if err != nil {
+			return events, err
+		}
+
+		scc := trace.SpanContextConfig{
+			TraceID:    tid,
+			SpanID:     sid,
+			TraceFlags: trace.FlagsSampled,
+			TraceState: trace.TraceState{},
+			Remote:     false,
+		}
+		if sc := trace.NewSpanContext(scc); sc.IsValid() {
+			l.spanContext = sc
 		}
 	}
 
