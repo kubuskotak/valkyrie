@@ -1,7 +1,6 @@
 package valkyrie
 
 import (
-	"fmt"
 	"os"
 	"path/filepath"
 
@@ -18,22 +17,21 @@ type (
 
 func Config(opts ConfigOpts) error {
 	for _, p := range opts.Paths {
-		filePath := filepath.Join(p, ".env")
+		fp := filepath.Join(p, ".env")
 		// load env from file
-		if _, fileErr := os.Stat(filePath); fileErr == nil {
-			filePath := fmt.Sprintf("%s/%s", p, ".env")
+		if _, fileErr := os.Stat(fp); fileErr == nil {
 			// Set ENV for development
-			_ = cleanenv.ReadConfig(filePath, opts.Config)
+			_ = cleanenv.ReadConfig(fp, opts.Config)
 		}
 	}
 	var err error
 	for _, f := range opts.Filenames {
 		for _, p := range opts.Paths {
-			filePath := filepath.Join(p, f)
-			if _, fileErr := os.Stat(filePath); fileErr != nil {
+			fp := filepath.Join(p, f)
+			if _, fileErr := os.Stat(fp); fileErr != nil {
 				return fileErr
 			}
-			if err = cleanenv.ReadConfig(filePath, opts.Config); err != nil {
+			if err = cleanenv.ReadConfig(fp, opts.Config); err != nil {
 				return err
 			}
 		}
