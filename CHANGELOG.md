@@ -4,6 +4,9 @@
 
 <a name="v0.2.1"></a>
 ## [v0.2.1] - 2021-12-22
+### Doc
+- updated release
+
 ### Feat
 - change jaeger to opentelementary client ([#9](https://github.com/kubuskotak/valkyrie/issues/9))
 
